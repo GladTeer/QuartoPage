@@ -1,0 +1,235 @@
+---
+title: "Lab 5 - Poisson - Questions"
+author:
+    date: last-modified
+    format:
+      html:
+        self-contained: true
+        anchor-sections: true
+        code-tools: true
+        code-fold: true
+        fig-width: 8
+        fig-height: 4
+        code-block-bg: "#f1f3f5"
+        code-block-border-left: "#31BAE9"
+        mainfont: Source Sans Pro
+        theme: journal
+        toc: true
+        toc-depth: 3
+        toc-location: left
+        captions: true
+        cap-location: margin
+        table-captions: true
+        tbl-cap-location: margin
+        reference-location: margin
+      pdf:
+        pdf-engine: lualatex
+        toc: false
+        number-sections: true
+        number-depth: 2
+        top-level-division: section
+        reference-location: document
+        listings: false
+        header-includes:
+          \usepackage{marginnote, here, relsize, needspace, setspace}
+          \def\it{\emph}
+execute:
+  freeze: auto
+  echo: true
+  message: false
+  warning: false
+  fig-align: center
+  fig-width: 12
+  fig-height: 8
+  editor_options: 
+  chunk_output_type: inline
+  code-overflow: wrap
+  html:
+    code-fold: true
+    code-tools: true
+---
+
+1.  To complete this lab:
+
+-   Load packages
+
+```{r}
+library(MASS)
+library(tidyverse)
+library(emmeans)
+library(ggeffects)
+library(easystats)
+library(performance)
+library(knitr)
+```
+
+- Download the dataset:
+
+```{r}
+
+library(tidyverse)
+
+data <- read_delim("https://raw.githubusercontent.com/jgeller112/psy504-advanced-stats/main/slides/Poisson/data/2010.csv")
+
+```
+
+2. Conduct the analysis described in the preregistration document
+
+a.  The number of hours per week that a person spends on the Internet ("WWWHR") will\
+    be predicted by their vocabulary ("WORDSUM"), age ("AGE"), sex ("SEX"), religiosity\
+    ("RELITEN"), political orientation ("POLVIEWS"), and how often they work from home\
+    ("WRKHOME").
+
+
+- Let's use the `naniar` package's function `replace_with_na`to clean the data. 
+
+```{r}
+library(naniar)
+
+data_pos <- data %>%
+  dplyr::select(wwwhr, wordsum, age, sex, reliten, polviews, wrkhome) %>%
+replace_with_na(.,
+             replace = list(wwwhr = c(-1, 998, 999),
+                          wordsum = c(-1, 99),
+                          reliten = c(0, 8, 9), 
+             polviews = c(0, 8, 9), 
+             wrkhome = c(0,8,9), 
+             age=c(0, 98, 99)))
+```
+Q: Can you explain what might be going on in the above code?
+
+A: The 7 specified columns specified are chosen to put in a new df. Then for each of the columns, if an element is a certain value, it becomes NA
+
+
+
+Q: The next step in data cleaning would be to ensure that the data in your code are aligned with the description/ usage context of the variables
+
+- Recode sex and reliten as necessary
+
+```{r}
+data_pos$sex_recode = as.factor(data_pos$sex)
+data_pos$reliten_recode = as.factor(data_pos$reliten)
+
+
+
+```
+## Missingness
+```{r}
+data_pos %>%
+  dplyr::select(reliten, reliten_recode)
+
+
+library(skimr)
+skimr::skim(data_pos)
+
+```
+
+
+## Fit a Poisson model to the data.
+
+```{r}
+library(lme4)
+model_1 <- glm(wwwhr ~ age+ wordsum + sex_recode+reliten_recode+polviews+wrkhome , data = data_pos, family = poisson(link = "log")) 
+
+```
+## Carry out model checking
+
+Hint: performance package has the function you're looking for
+
+```{r}
+library(performance)
+check_model(model_1)
+
+```
+
+## Find any outliers
+
+```{r}
+outlier_indices <- check_outliers(model_1)
+
+data_cleaned <- data_pos %>%
+  filter(!row_number() %in% which(outlier_indices))
+
+```
+
+## Refit the model after excludint outliers
+
+```{r}
+model_2 = glm(wwwhr ~ age+ wordsum + sex_recode+reliten_recode+polviews+wrkhome , data = data_cleaned, family = poisson(link = "log")) 
+
+
+```
+
+```{r}
+model_parameters(model_2) %>%
+  print_html()
+```
+
+### Check for Overdispersion 
+
+Hint: performance package has the function you're looking for
+```{r}
+check_overdispersion(model_2)
+
+
+```
+
+What do you notice?
+And what's a good next step forward?
+There is overdispersion. We can try the negative binomial approach
+Can there be another model class that can fit the data? If so, fit this model to the data. 
+
+```{r}
+#data_cleaned <- data_cleaned %>%
+ # mutate(ID = row_number())
+m.nb <- glm.nb(wwwhr ~ age+ wordsum + sex_recode+reliten_recode+polviews+wrkhome , data = data_cleaned) 
+
+```
+
+## Which one is better- your earlier model, or later model?
+We can see the negative binomial model works better
+
+```{r}
+test_likelihoodratio(m.nb, model_2) %>%
+  kable()
+
+
+
+```
+
+
+## What is zero inflation? Is there zero-inflation in your chosen model?
+```{r}
+performance::check_zeroinflation(m.nb)
+
+```
+There is no zero inflation since observed zero < predicted zero
+Zero inflation is when the data has too many zeros, which biases the model.
+
+::: panel-tabset
+## Log Lambda
+
+```{r}
+# Compute log(lambda) (fitted values from the model)
+log_lambda <- predict(m.nb, type = "link")
+
+# Visualize log-lambda distribution
+hist(log_lambda, breaks = 30, main = "Distribution of Log Lambda", xlab = "Log Lambda")
+
+
+```
+
+## Mean Count
+
+```{r}
+# Compute mean observed count
+mean_count <- mean(data_pos$wwwhr, na.rm = TRUE)
+mean_count
+
+
+```
+:::
+
+## Report your conclusions
+The log lambda is normally distributed. 
+Looking at the peak of the loglambda graph, exponentiate it exp(2.1)=8.17, which is similar to the mean count. That means the model fits well.
